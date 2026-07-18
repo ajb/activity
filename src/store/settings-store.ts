@@ -23,6 +23,7 @@ export type SettingsState = {
 	settingBatchtime: 0 | 1 | 2 | 3 // How to group the activity emails
 	methods: Array<string> // Available methods for activity (push, mail, ...)
 	endpoint: string // API endpoint to talk to (user or admin settings)
+	excludedFileExtensions: string // File extensions excluded from activity logging, one per line
 }
 
 const store = new createStore({
@@ -36,6 +37,7 @@ const store = new createStore({
 		settingBatchtime: loadState('activity', 'setting_batchtime'),
 		methods: loadState('activity', 'methods'),
 		endpoint: '',
+		excludedFileExtensions: loadState('activity', 'exclude_file_extensions', ''),
 	} as SettingsState,
 	getters: {
 		/**
@@ -122,6 +124,16 @@ const store = new createStore({
 		 */
 		TOGGLE_EMAIL_ENABLED(state: SettingsState, { emailEnabled }) {
 			state.emailEnabled = emailEnabled
+		},
+		/**
+		 * Set the excluded file extensions.
+		 *
+		 * @param state - The current state.
+		 * @param payload - The payload.
+		 * @param payload.excludedFileExtensions - The excluded file extensions, one per line.
+		 */
+		SET_EXCLUDED_FILE_EXTENSIONS(state: SettingsState, { excludedFileExtensions }) {
+			state.excludedFileExtensions = excludedFileExtensions
 		},
 	},
 	actions: {
@@ -290,6 +302,24 @@ const store = new createStore({
 				showError(t('activity', 'Unable to save the settings'))
 				logger.error('An error occurred while saving the activity settings', { error })
 			}
+		},
+
+		/**
+		 * Persist the excluded file extensions to the server.
+		 *
+		 * The component commits SET_EXCLUDED_FILE_EXTENSIONS synchronously on every
+		 * keystroke so the field's displayed value never lags behind typing, and only
+		 * debounces the call to this action. This action does not catch its own
+		 * errors: the caller drives an inline success/error indicator on the field
+		 * (see AdminSettings.vue), mirroring how Nextcloud core saves personal info
+		 * fields such as the "About" biography (settings/src/components/PersonalInfo/shared/AccountPropertySection.vue).
+		 *
+		 * @param _ - Action context (unused)
+		 * @param payload - The payload.
+		 * @param payload.excludedFileExtensions - The excluded file extensions, one per line.
+		 */
+		setExcludedFileExtensions(_, { excludedFileExtensions }) {
+			OCP.AppConfig.setValue('activity', 'exclude_file_extensions', excludedFileExtensions)
 		},
 
 		/**

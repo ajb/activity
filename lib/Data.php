@@ -6,6 +6,7 @@ declare(strict_types=1);
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
  * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Activity;
 
 use Doctrine\DBAL\Platforms\MySQLPlatform;
@@ -29,6 +30,7 @@ class Data {
 	/** @var  */
 	protected ?IQueryBuilder $insertActivity = null;
 	protected ?IQueryBuilder $insertMail = null;
+	private ?array $excludedFileExtensions = null;
 
 	public function __construct(
 		protected IManager $activityManager,
@@ -39,13 +41,95 @@ class Data {
 	}
 
 	/**
+	 * Check if the event should be processed (not excluded and has valid target)
+	 *
+	 * @param IEvent $event
+	 * @return bool
+	 */
+	private function shouldSend(IEvent $event): bool {
+		return ($event->getAffectedUser() !== '' && !$this->isExcludedAuthor($event)) && !$this->isExcludedFile($event);
+	}
+
+	/**
+	 * Check if the event's file is excluded from activity logging
+	 *
+	 * @param IEvent $event
+	 * @return bool
+	 */
+	private function isExcludedFile(IEvent $event): bool {
+		if ($event->getObjectType() !== 'files') {
+			return false;
+		}
+
+		$path = $event->getObjectName();
+		if ($path === '') {
+			return false;
+		}
+
+		$extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+		if ($extension === '') {
+			return false;
+		}
+
+		return in_array($extension, $this->getExcludedFileExtensions(), true);
+	}
+
+	/**
+	 * Get the list of file extensions excluded from activity logging
+	 *
+	 * @return string[]
+	 */
+	private function getExcludedFileExtensions(): array {
+		if ($this->excludedFileExtensions !== null) {
+			return $this->excludedFileExtensions;
+		}
+
+		$raw = $this->config->getAppValue('activity', 'exclude_file_extensions', '');
+		if ($raw === '') {
+			return $this->excludedFileExtensions = [];
+		}
+
+		$extensions = preg_split('/[\r\n]+/', $raw);
+		$extensions = array_map(static fn (string $extension): string => strtolower(trim($extension, ". \t\n\r\0\x0B")), $extensions);
+
+		return $this->excludedFileExtensions = array_values(array_filter($extensions, static fn (string $extension): bool => $extension !== ''));
+	}
+
+	/**
+	 * Check if the event's author is excluded from activity logging
+	 *
+	 * @param IEvent $event
+	 * @return bool
+	 */
+	private function isExcludedAuthor(IEvent $event): bool {
+		$excludedUsers = $this->config->getSystemValue('activity_log_exclude_users', []);
+		if (empty($excludedUsers)) {
+			return false;
+		}
+		$author = $event->getAuthor();
+		if ($author === '' || !isset($excludedUsers[$author])) {
+			return false;
+		}
+		$rule = $excludedUsers[$author];
+		if (is_array($rule)) {
+			return in_array($event->getType(), $rule, true);
+		} else {
+			$this->logger->warning(
+				'activity_log_exclude_users rule for user "{user}" is not an array, skipping!',
+				['app' => 'activity', 'user' => $author]
+			);
+		}
+		return false;
+	}
+
+	/**
 	 * Send an event into the activity stream
 	 *
 	 * @param IEvent $event
 	 * @return int
 	 */
 	public function send(IEvent $event): int {
-		if ($event->getAffectedUser() === '') {
+		if (!$this->shouldSend($event)) {
 			return 0;
 		}
 
@@ -103,6 +187,10 @@ class Data {
 	 * @throws Exception
 	 */
 	public function bulkSend(IEvent $event, array $affectedUsers): array {
+		if ($this->isExcludedAuthor($event) || $this->isExcludedFile($event)) {
+			return [];
+		}
+
 		$this->connection->beginTransaction();
 
 		$activityIds = [];
@@ -169,8 +257,7 @@ class Data {
 	 * @return bool
 	 */
 	public function storeMail(IEvent $event, int $latestSendTime): bool {
-		$affectedUser = $event->getAffectedUser();
-		if ($affectedUser === '') {
+		if (!$this->shouldSend($event)) {
 			return false;
 		}
 
@@ -194,7 +281,7 @@ class Data {
 			'amq_appid' => $event->getApp(),
 			'amq_subject' => $event->getSubject(),
 			'amq_subjectparams' => json_encode($event->getSubjectParameters()),
-			'amq_affecteduser' => $affectedUser,
+			'amq_affecteduser' => $event->getAffectedUser(),
 			'amq_timestamp' => $event->getTimestamp(),
 			'amq_type' => $event->getType(),
 			'amq_latest_send' => $latestSendTime,

@@ -93,6 +93,7 @@ class Admin implements ISettings {
 			$settingBatchTime = UserSettings::EMAIL_SEND_ASAP;
 		}
 
+		$this->initialState->provideInitialState('exclude_file_extensions', $this->config->getAppValue('activity', 'exclude_file_extensions', ''));
 		$this->initialState->provideInitialState('setting', 'admin');
 		$this->initialState->provideInitialState('activity_groups', $activityGroups);
 		$this->initialState->provideInitialState('is_email_set', true);

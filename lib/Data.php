@@ -30,6 +30,7 @@ class Data {
 	/** @var  */
 	protected ?IQueryBuilder $insertActivity = null;
 	protected ?IQueryBuilder $insertMail = null;
+	private ?array $excludedFileExtensions = null;
 
 	public function __construct(
 		protected IManager $activityManager,
@@ -46,7 +47,52 @@ class Data {
 	 * @return bool
 	 */
 	private function shouldSend(IEvent $event): bool {
-		return $event->getAffectedUser() !== '' && !$this->isExcludedAuthor($event);
+		return ($event->getAffectedUser() !== '' && !$this->isExcludedAuthor($event)) && !$this->isExcludedFile($event);
+	}
+
+	/**
+	 * Check if the event's file is excluded from activity logging
+	 *
+	 * @param IEvent $event
+	 * @return bool
+	 */
+	private function isExcludedFile(IEvent $event): bool {
+		if ($event->getObjectType() !== 'files') {
+			return false;
+		}
+
+		$path = $event->getObjectName();
+		if ($path === '') {
+			return false;
+		}
+
+		$extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+		if ($extension === '') {
+			return false;
+		}
+
+		return in_array($extension, $this->getExcludedFileExtensions(), true);
+	}
+
+	/**
+	 * Get the list of file extensions excluded from activity logging
+	 *
+	 * @return string[]
+	 */
+	private function getExcludedFileExtensions(): array {
+		if ($this->excludedFileExtensions !== null) {
+			return $this->excludedFileExtensions;
+		}
+
+		$raw = $this->config->getAppValue('activity', 'exclude_file_extensions', '');
+		if ($raw === '') {
+			return $this->excludedFileExtensions = [];
+		}
+
+		$extensions = preg_split('/[\r\n]+/', $raw);
+		$extensions = array_map(static fn (string $extension): string => strtolower(trim($extension, ". \t\n\r\0\x0B")), $extensions);
+
+		return $this->excludedFileExtensions = array_values(array_filter($extensions, static fn (string $extension): bool => $extension !== ''));
 	}
 
 	/**
@@ -141,7 +187,7 @@ class Data {
 	 * @throws Exception
 	 */
 	public function bulkSend(IEvent $event, array $affectedUsers): array {
-		if ($this->isExcludedAuthor($event)) {
+		if ($this->isExcludedAuthor($event) || $this->isExcludedFile($event)) {
 			return [];
 		}
 
